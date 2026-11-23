@@ -14,7 +14,10 @@ _embedder: SentenceTransformer | None = None
 def get_embedder() -> SentenceTransformer:
     global _embedder
     if _embedder is None:
-        _embedder = SentenceTransformer(MODEL_NAME)
+        try:
+            _embedder = SentenceTransformer(MODEL_NAME, local_files_only=True)
+        except Exception:
+            _embedder = SentenceTransformer(MODEL_NAME)
     return _embedder
 
 

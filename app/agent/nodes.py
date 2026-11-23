@@ -28,9 +28,11 @@ def _get_llm():
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     return ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
         google_api_key=api_key,
         temperature=0.0,
+        timeout=25,
+        max_retries=1,
     )
 
 
@@ -62,17 +64,22 @@ async def triage_node(state: AgentState) -> dict:
         result = _fallback_triage(state["service_name"], state["raw_log"])
         return {"triage": result.model_dump()}
 
-    structured_llm = llm.with_structured_output(TriageResult)
-    prompt = (
-        "You are an SRE incident triage specialist. Extract the severity (P1-P4), "
-        "exception type, suspected file path, suspected function name, and a concise "
-        "semantic search query from this production log.\n\n"
-        f"Service: {state['service_name']}\n"
-        f"Environment: {state['environment']}\n"
-        f"Raw Log:\n{state['raw_log']}"
-    )
-    result = await structured_llm.ainvoke(prompt)
-    return {"triage": result.model_dump()}
+    try:
+        structured_llm = llm.with_structured_output(TriageResult)
+        prompt = (
+            "You are an SRE incident triage specialist. Extract the severity (P1-P4), "
+            "exception type, suspected file path, suspected function name, and a concise "
+            "semantic search query from this production log.\n\n"
+            f"Service: {state['service_name']}\n"
+            f"Environment: {state['environment']}\n"
+            f"Raw Log:\n{state['raw_log']}"
+        )
+        result = await structured_llm.ainvoke(prompt)
+        return {"triage": result.model_dump()}
+    except Exception as exc:
+        print(f"Triage LLM unavailable ({exc}), falling back to deterministic parser.")
+        result = _fallback_triage(state["service_name"], state["raw_log"])
+        return {"triage": result.model_dump()}
 
 
 async def retrieve_node(state: AgentState) -> dict:
@@ -157,20 +164,25 @@ async def synthesize_node(state: AgentState) -> dict:
         report = _fallback_synthesis(state)
         return {"report": report.model_dump()}
 
-    structured_llm = llm.with_structured_output(DiagnosisReport)
-    formatted_chunks = "\n\n".join(
-        f"[{c['file_path']}:{c['start_line']}-{c['end_line']}]\n{c['content']}"
-        for c in state["retrieved_chunks"]
-    )
-    prompt = (
-        "You are a senior Site Reliability Engineer. Produce a precise root-cause "
-        "diagnosis report grounded strictly in the retrieved code, runbooks, and git history.\n\n"
-        f"Service: {state['service_name']} ({state['environment']})\n"
-        f"Raw Log:\n{state['raw_log']}\n\n"
-        f"Triage Classification: {state['triage']}\n\n"
-        f"Retrieved Code & Runbooks:\n{formatted_chunks}\n\n"
-        f"Inspected File Snippet:\n{state['file_context']}\n\n"
-        f"Recent Git Commits:\n{state['git_history']}"
-    )
-    report = await structured_llm.ainvoke(prompt)
-    return {"report": report.model_dump()}
+    try:
+        structured_llm = llm.with_structured_output(DiagnosisReport)
+        formatted_chunks = "\n\n".join(
+            f"[{c['file_path']}:{c['start_line']}-{c['end_line']}]\n{c['content']}"
+            for c in state["retrieved_chunks"]
+        )
+        prompt = (
+            "You are a senior Site Reliability Engineer. Produce a precise root-cause "
+            "diagnosis report grounded strictly in the retrieved code, runbooks, and git history.\n\n"
+            f"Service: {state['service_name']} ({state['environment']})\n"
+            f"Raw Log:\n{state['raw_log']}\n\n"
+            f"Triage Classification: {state['triage']}\n\n"
+            f"Retrieved Code & Runbooks:\n{formatted_chunks}\n\n"
+            f"Inspected File Snippet:\n{state['file_context']}\n\n"
+            f"Recent Git Commits:\n{state['git_history']}"
+        )
+        report = await structured_llm.ainvoke(prompt)
+        return {"report": report.model_dump()}
+    except Exception as exc:
+        print(f"Synthesis LLM unavailable ({exc}), falling back to deterministic report.")
+        report = _fallback_synthesis(state)
+        return {"report": report.model_dump()}

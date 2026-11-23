@@ -49,7 +49,7 @@ This system automates first-responder triage while keeping log ingestion complet
 | **API & Validation** | Python 3.14, FastAPI, Pydantic v2, Uvicorn |
 | **Queue & Deduplication** | Redis 7, ARQ (async worker queue) |
 | **Database & Vector Store** | PostgreSQL 16, `pgvector` (`Vector(384)`), SQLAlchemy (async), `asyncpg` |
-| **Agent & Embeddings** | LangGraph, `sentence-transformers` (`all-MiniLM-L6-v2`), Gemini API (`gemini-2.5-flash`) with deterministic offline fallback |
+| **Agent & Embeddings** | LangGraph, `sentence-transformers` (`all-MiniLM-L6-v2`), Gemini API (`gemini-3.8-flash`) with deterministic offline fallback |
 | **Infrastructure & Testing** | Docker Compose, `pytest`, `pytest-asyncio` |
 
 ---
