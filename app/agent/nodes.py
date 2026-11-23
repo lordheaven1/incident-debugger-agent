@@ -21,18 +21,26 @@ class AgentState(TypedDict):
     report: dict
 
 
-def _get_llm():
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return None
+def _get_candidate_models() -> list[str]:
+    primary = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+    extra = os.getenv(
+        "GEMINI_FALLBACK_MODELS",
+        "gemini-3.7-flash,gemini-3.6-flash,gemini-3.8-flash",
+    )
+    models = [primary] + [m.strip() for m in extra.split(",") if m.strip()]
+    seen = set()
+    return [m for m in models if not (m in seen or seen.add(m))]
+
+
+def _build_llm(model_name: str, api_key: str):
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     return ChatGoogleGenerativeAI(
-        model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+        model=model_name,
         google_api_key=api_key,
         temperature=0.0,
         timeout=25,
-        max_retries=1,
+        max_retries=0,
     )
 
 
@@ -59,27 +67,39 @@ def _fallback_triage(service_name: str, raw_log: str) -> TriageResult:
 
 
 async def triage_node(state: AgentState) -> dict:
-    llm = _get_llm()
-    if llm is None:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
         result = _fallback_triage(state["service_name"], state["raw_log"])
         return {"triage": result.model_dump()}
 
-    try:
-        structured_llm = llm.with_structured_output(TriageResult)
-        prompt = (
-            "You are an SRE incident triage specialist. Extract the severity (P1-P4), "
-            "exception type, suspected file path, suspected function name, and a concise "
-            "semantic search query from this production log.\n\n"
-            f"Service: {state['service_name']}\n"
-            f"Environment: {state['environment']}\n"
-            f"Raw Log:\n{state['raw_log']}"
-        )
-        result = await structured_llm.ainvoke(prompt)
-        return {"triage": result.model_dump()}
-    except Exception as exc:
-        print(f"Triage LLM unavailable ({exc}), falling back to deterministic parser.")
-        result = _fallback_triage(state["service_name"], state["raw_log"])
-        return {"triage": result.model_dump()}
+    prompt = (
+        "You are an SRE incident triage specialist. Extract the severity (P1-P4), "
+        "exception type, suspected file path, suspected function name, and a concise "
+        "semantic search query from this production log.\n\n"
+        "Severity Rubric:\n"
+        "- P1: Critical outages or systemic failures in core paths (e.g., ZeroDivisionError, "
+        "ConnectionError, DatabaseError, or CRITICAL logs impacting all users).\n"
+        "- P2: High-severity application errors affecting specific requests or edge cases "
+        "(e.g., KeyError, ValueError, TypeError).\n"
+        "- P3: Degraded performance or recoverable warnings.\n"
+        "- P4: Minor or informational issues.\n\n"
+        f"Service: {state['service_name']}\n"
+        f"Environment: {state['environment']}\n"
+        f"Raw Log:\n{state['raw_log']}"
+    )
+
+    for model_name in _get_candidate_models():
+        try:
+            structured_llm = _build_llm(model_name, api_key).with_structured_output(TriageResult)
+            result = await structured_llm.ainvoke(prompt)
+            print(f"[triage] Live LLM response from {model_name}")
+            return {"triage": result.model_dump()}
+        except Exception as exc:
+            print(f"[triage] {model_name} unavailable ({exc})")
+
+    print("[triage] All LLM models unavailable, falling back to deterministic parser.")
+    result = _fallback_triage(state["service_name"], state["raw_log"])
+    return {"triage": result.model_dump()}
 
 
 async def retrieve_node(state: AgentState) -> dict:
@@ -159,30 +179,35 @@ def _fallback_synthesis(state: AgentState) -> DiagnosisReport:
 
 
 async def synthesize_node(state: AgentState) -> dict:
-    llm = _get_llm()
-    if llm is None:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
         report = _fallback_synthesis(state)
         return {"report": report.model_dump()}
 
-    try:
-        structured_llm = llm.with_structured_output(DiagnosisReport)
-        formatted_chunks = "\n\n".join(
-            f"[{c['file_path']}:{c['start_line']}-{c['end_line']}]\n{c['content']}"
-            for c in state["retrieved_chunks"]
-        )
-        prompt = (
-            "You are a senior Site Reliability Engineer. Produce a precise root-cause "
-            "diagnosis report grounded strictly in the retrieved code, runbooks, and git history.\n\n"
-            f"Service: {state['service_name']} ({state['environment']})\n"
-            f"Raw Log:\n{state['raw_log']}\n\n"
-            f"Triage Classification: {state['triage']}\n\n"
-            f"Retrieved Code & Runbooks:\n{formatted_chunks}\n\n"
-            f"Inspected File Snippet:\n{state['file_context']}\n\n"
-            f"Recent Git Commits:\n{state['git_history']}"
-        )
-        report = await structured_llm.ainvoke(prompt)
-        return {"report": report.model_dump()}
-    except Exception as exc:
-        print(f"Synthesis LLM unavailable ({exc}), falling back to deterministic report.")
-        report = _fallback_synthesis(state)
-        return {"report": report.model_dump()}
+    formatted_chunks = "\n\n".join(
+        f"[{c['file_path']}:{c['start_line']}-{c['end_line']}]\n{c['content']}"
+        for c in state["retrieved_chunks"]
+    )
+    prompt = (
+        "You are a senior Site Reliability Engineer. Produce a precise root-cause "
+        "diagnosis report grounded strictly in the retrieved code, runbooks, and git history.\n\n"
+        f"Service: {state['service_name']} ({state['environment']})\n"
+        f"Raw Log:\n{state['raw_log']}\n\n"
+        f"Triage Classification: {state['triage']}\n\n"
+        f"Retrieved Code & Runbooks:\n{formatted_chunks}\n\n"
+        f"Inspected File Snippet:\n{state['file_context']}\n\n"
+        f"Recent Git Commits:\n{state['git_history']}"
+    )
+
+    for model_name in _get_candidate_models():
+        try:
+            structured_llm = _build_llm(model_name, api_key).with_structured_output(DiagnosisReport)
+            report = await structured_llm.ainvoke(prompt)
+            print(f"[synthesize] Live LLM response from {model_name}")
+            return {"report": report.model_dump()}
+        except Exception as exc:
+            print(f"[synthesize] {model_name} unavailable ({exc})")
+
+    print("[synthesize] All LLM models unavailable, falling back to deterministic report.")
+    report = _fallback_synthesis(state)
+    return {"report": report.model_dump()}
