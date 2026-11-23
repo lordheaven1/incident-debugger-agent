@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Autonomous SRE Incident Debugger</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #070b14; color: #e2e8f0; }
+    .glass { background: rgba(15, 23, 42, 0.72); backdrop-filter: blur(12px); border: 1px solid rgba(51, 65, 85, 0.6); }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col antialiased selection:bg-indigo-500/30 selection:text-indigo-200">
+  <header class="sticky top-0 z-30 border-b border-slate-800/80 bg-[#070b14]/90 backdrop-blur-md">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-base font-semibold tracking-tight text-white">Autonomous Incident Debugger</h1>
+          <p class="text-xs text-slate-400">LangGraph SRE Agent &bull; Neon pgvector &bull; Upstash Redis</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <div id="health-pill" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-900 border border-slate-800 text-slate-300">
+          <span id="health-dot" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+          <span id="health-text">Checking cluster...</span>
+        </div>
+        <a href="/docs" target="_blank" class="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+          Swagger API &nearr;
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <section class="lg:col-span-4 space-y-5">
+      <div class="glass rounded-2xl p-5 shadow-xl">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-white uppercase tracking-wider">Ingest Production Log</h2>
+          <span class="text-[11px] font-mono text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded">POST /ingest</span>
+        </div>
+
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-slate-400 mb-2">Quick Crash Scenarios</label>
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" onclick="loadPreset('auth')" class="text-left p-2.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-indigo-500/40 transition group">
+              <div class="text-xs font-medium text-slate-200 group-hover:text-indigo-300">Auth Quota Crash</div>
+              <div class="text-[11px] text-slate-500 font-mono mt-0.5">ZeroDivisionError</div>
+            </button>
+            <button type="button" onclick="loadPreset('duplicate')" class="text-left p-2.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/40 transition group">
+              <div class="text-xs font-medium text-slate-200 group-hover:text-cyan-300">Duplicate Storm</div>
+              <div class="text-[11px] text-slate-500 font-mono mt-0.5">New TS &amp; UUID</div>
+            </button>
+          </div>
+        </div>
+
+        <form id="ingest-form" class="space-y-4">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1.5">Service Name</label>
+              <input id="service_name" type="text" value="auth-service" required class="w-full px-3 py-2 rounded-xl bg-slate-950/90 border border-slate-800 text-sm text-white font-mono focus:outline-none focus:border-indigo-500" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1.5">Environment</label>
+              <select id="environment" class="w-full px-3 py-2 rounded-xl bg-slate-950/90 border border-slate-800 text-sm text-white focus:outline-none focus:border-indigo-500">
+                <option value="production">production</option>
+                <option value="staging">staging</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">Raw Stack Trace / Error Log</label>
+            <textarea id="raw_log" rows="5" required class="w-full p-3 rounded-xl bg-slate-950/90 border border-slate-800 text-xs text-slate-200 font-mono leading-relaxed focus:outline-none focus:border-indigo-500"></textarea>
+          </div>
+
+          <button id="submit-btn" type="submit" class="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white text-sm font-semibold shadow-lg shadow-indigo-500/20 transition flex items-center justify-center gap-2">
+            <span>Dispatch to SRE Agent</span>
+          </button>
+        </form>
+
+        <div id="ingest-banner" class="hidden mt-4 p-3 rounded-xl text-xs border"></div>
+      </div>
+
+      <div class="glass rounded-2xl p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold text-white uppercase tracking-wider">Recent Incidents</h2>
+          <button onclick="fetchIncidents()" class="text-xs text-indigo-400 hover:text-indigo-300">Refresh</button>
+        </div>
+        <div id="incident-list" class="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+          <div class="text-xs text-slate-500 py-6 text-center">Loading incidents...</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="lg:col-span-8">
+      <div id="detail-card" class="glass rounded-2xl p-6 shadow-xl min-h-[620px] flex flex-col justify-between">
+        <div id="empty-state" class="my-auto text-center py-16 px-4">
+          <div class="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 mx-auto flex items-center justify-center mb-4 text-indigo-400">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+          </div>
+          <h3 class="text-base font-semibold text-white">Select an incident or ingest a log</h3>
+          <p class="text-xs text-slate-400 max-w-md mx-auto mt-1.5 leading-relaxed">
+            Incoming logs are fingerprinted, deduplicated in Upstash Redis, matched against repository code in Neon pgvector, and triaged by Gemini.
+          </p>
+        </div>
+
+        <div id="incident-detail" class="hidden space-y-6"></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    let selectedFingerprint = null;
+    let pollTimer = null;
+
+    function randomUuid() {
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
+
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function loadPreset(type) {
+      const ts = new Date().toISOString();
+      const uid = randomUuid();
+      document.getElementById('service_name').value = 'auth-service';
+      document.getElementById('environment').value = 'production';
+      if (type === 'auth' || type === 'duplicate') {
+        document.getElementById('raw_log').value =
+          `${ts} ERROR ZeroDivisionError: division by zero in calculate_token_quota for user ${uid} at sample_service/auth.py line 5`;
+      }
+    }
+
+    function severityStyle(sev) {
+      const map = {
+        P1: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+        P2: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+        P3: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+        P4: 'bg-slate-500/15 text-slate-300 border-slate-500/30',
+      };
+      return map[sev] || 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30';
+    }
+
+    function statusBadge(status) {
+      if (status === 'diagnosed') {
+        return '<span class="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">Diagnosed</span>';
+      }
+      if (status === 'failed') {
+        return '<span class="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">Failed</span>';
+      }
+      return '<span class="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30 animate-pulse">' + escapeHtml(status) + '</span>';
+    }
+
+    async function checkHealth() {
+      const dot = document.getElementById('health-dot');
+      const text = document.getElementById('health-text');
+      try {
+        const res = await fetch('/health');
+        const data = await res.json();
+        if (res.ok && data.status === 'ok') {
+          dot.className = 'w-2 h-2 rounded-full bg-emerald-400';
+          text.textContent = `API Online • Redis: ${data.redis}`;
+        } else {
+          dot.className = 'w-2 h-2 rounded-full bg-rose-400';
+          text.textContent = 'Degraded';
+        }
+      } catch {
+        dot.className = 'w-2 h-2 rounded-full bg-rose-400';
+        text.textContent = 'Reconnecting...';
+      }
+    }
+
+    async function fetchIncidents() {
+      const listEl = document.getElementById('incident-list');
+      try {
+        const res = await fetch('/incidents?limit=15');
+        const items = await res.json();
+        if (!items.length) {
+          listEl.innerHTML = '<div class="text-xs text-slate-500 py-6 text-center">No incidents recorded yet.</div>';
+          return;
+        }
+        if (!selectedFingerprint) {
+          selectIncident(items[0].fingerprint);
+        }
+        listEl.innerHTML = items.map(item => {
+          const active = item.fingerprint === selectedFingerprint;
+          const sev = item.diagnosis && item.diagnosis.severity ? item.diagnosis.severity : '...';
+          return `
+            <button onclick="selectIncident('${escapeHtml(item.fingerprint)}')"
+              class="w-full text-left p-3 rounded-xl border transition ${active ? 'bg-indigo-500/10 border-indigo-500/50' : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'}">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border ${severityStyle(sev)}">${escapeHtml(sev)}</span>
+                  <span class="text-xs font-semibold text-white truncate">${escapeHtml(item.service_name)}</span>
+                </div>
+                <span class="text-[11px] font-mono text-cyan-300 bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.5 rounded">x${item.occurrence_count}</span>
+              </div>
+              <div class="flex items-center justify-between mt-2 text-[11px] text-slate-400 font-mono">
+                <span>#${escapeHtml(item.fingerprint)}</span>
+                <span>${escapeHtml(item.status)}</span>
+              </div>
+            </button>
+          `;
+        }).join('');
+      } catch {
+        listEl.innerHTML = '<div class="text-xs text-rose-400 py-4 text-center">Unable to load incidents.</div>';
+      }
+    }
+
+    async function selectIncident(fingerprint) {
+      selectedFingerprint = fingerprint;
+      if (pollTimer) clearInterval(pollTimer);
+      await renderIncidentDetail(fingerprint);
+      fetchIncidents();
+    }
+
+    async function renderIncidentDetail(fingerprint) {
+      const emptyEl = document.getElementById('empty-state');
+      const detailEl = document.getElementById('incident-detail');
+      try {
+        const res = await fetch(`/incidents/${encodeURIComponent(fingerprint)}`);
+        if (!res.ok) return;
+        const inc = await res.json();
+        emptyEl.classList.add('hidden');
+        detailEl.classList.remove('hidden');
+
+        const d = inc.diagnosis || {};
+        const isPending = inc.status === 'queued' || inc.status === 'investigating';
+
+        if (isPending) {
+          pollTimer = setInterval(async () => {
+            const check = await fetch(`/incidents/${encodeURIComponent(fingerprint)}`);
+            if (check.ok) {
+              const latest = await check.json();
+              if (latest.status !== 'queued' && latest.status !== 'investigating') {
+                clearInterval(pollTimer);
+                renderIncidentDetail(fingerprint);
+                fetchIncidents();
+              }
+            }
+          }, 2500);
+        }
+
+        const confidencePct = typeof d.confidence === 'number' ? Math.round(d.confidence * 100) : 0;
+
+        detailEl.innerHTML = `
+          <div class="flex flex-wrap items-start justify-between gap-4 pb-5 border-b border-slate-800">
+            <div>
+              <div class="flex items-center gap-2.5 flex-wrap">
+                ${d.severity ? `<span class="px-2.5 py-0.5 rounded-md text-xs font-mono font-bold border ${severityStyle(d.severity)}">${escapeHtml(d.severity)}</span>` : ''}
+                <h2 class="text-lg font-bold text-white">${escapeHtml(d.exception_type || inc.service_name)}</h2>
+                ${statusBadge(inc.status)}
+              </div>
+              <div class="flex items-center gap-3 mt-2 text-xs text-slate-400 font-mono">
+                <span>Fingerprint: <strong class="text-slate-200">${escapeHtml(inc.fingerprint)}</strong></span>
+                <span>&bull;</span>
+                <span>Service: <strong class="text-slate-200">${escapeHtml(inc.service_name)}</strong> (${escapeHtml(inc.environment)})</span>
+                <span>&bull;</span>
+                <span>Occurrences: <strong class="text-cyan-300">${inc.occurrence_count}</strong></span>
+              </div>
+            </div>
+            ${typeof d.confidence === 'number' ? `
+              <div class="text-right">
+                <div class="text-[11px] uppercase tracking-wider text-slate-400">Agent Confidence</div>
+                <div class="text-lg font-mono font-bold text-emerald-400">${confidencePct}%</div>
+              </div>
+            ` : ''}
+          </div>
+
+          ${isPending ? `
+            <div class="p-6 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center gap-4">
+              <div class="w-6 h-6 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin shrink-0"></div>
+              <div>
+                <div class="text-sm font-semibold text-indigo-200">Autonomous Agent Investigating...</div>
+                <div class="text-xs text-indigo-300/80 mt-0.5">Querying Neon pgvector embeddings, inspecting source files, and synthesizing fix via Gemini.</div>
+              </div>
+            </div>
+          ` : `
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="p-4 rounded-xl bg-slate-900/90 border border-slate-800">
+                <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-1">Affected Location</div>
+                <div class="text-sm font-mono text-cyan-300 break-all">${escapeHtml(d.affected_file || 'N/A')}:${escapeHtml(d.affected_lines || '?')}</div>
+              </div>
+              <div class="p-4 rounded-xl bg-slate-900/90 border border-slate-800">
+                <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-1">Recent Git Commit</div>
+                <div class="text-xs font-mono text-slate-200 break-all">${escapeHtml(d.recent_commit || 'No commits recorded')}</div>
+              </div>
+            </div>
+
+            <div class="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5">
+              <div class="text-xs font-semibold uppercase tracking-wider text-rose-300">Root Cause Analysis</div>
+              <p class="text-sm text-slate-200 leading-relaxed">${escapeHtml(d.root_cause || 'Diagnosis unavailable.')}</p>
+            </div>
+
+            <div class="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/30 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold uppercase tracking-wider text-emerald-300">Recommended Remediation</span>
+                <button onclick="navigator.clipboard.writeText(document.getElementById('fix-text').innerText)" class="text-[11px] text-emerald-300 hover:text-emerald-200 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">Copy Fix</button>
+              </div>
+              <pre id="fix-text" class="text-xs font-mono text-emerald-100 whitespace-pre-wrap leading-relaxed">${escapeHtml(d.suggested_fix || '')}</pre>
+            </div>
+          `}
+
+          <div class="space-y-1.5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-slate-400">Normalized &amp; Raw Production Log</div>
+            <pre class="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-slate-300 whitespace-pre-wrap break-all leading-relaxed">${escapeHtml(inc.raw_log)}</pre>
+          </div>
+        `;
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    document.getElementById('ingest-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('submit-btn');
+      const banner = document.getElementById('ingest-banner');
+      btn.disabled = true;
+      btn.textContent = 'Ingesting...';
+
+      try {
+        const res = await fetch('/ingest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            service_name: document.getElementById('service_name').value,
+            environment: document.getElementById('environment').value,
+            raw_log: document.getElementById('raw_log').value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ingest failed');
+
+        banner.classList.remove('hidden');
+        if (data.queued_for_triage) {
+          banner.className = 'mt-4 p-3 rounded-xl text-xs border bg-indigo-500/10 border-indigo-500/30 text-indigo-200';
+          banner.textContent = `New incident #${data.fingerprint} queued for AI triage.`;
+        } else {
+          banner.className = 'mt-4 p-3 rounded-xl text-xs border bg-cyan-500/10 border-cyan-500/30 text-cyan-200';
+          banner.textContent = `Deduplicated #${data.fingerprint} (occurrence #${data.occurrence_count}) — skipped redundant LLM call.`;
+        }
+
+        await selectIncident(data.fingerprint);
+      } catch (err) {
+        banner.classList.remove('hidden');
+        banner.className = 'mt-4 p-3 rounded-xl text-xs border bg-rose-500/10 border-rose-500/30 text-rose-200';
+        banner.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>Dispatch to SRE Agent</span>';
+      }
+    });
+
+    loadPreset('auth');
+    checkHealth();
+    fetchIncidents();
+    setInterval(checkHealth, 30000);
+  </script>
+</body>
+</html>

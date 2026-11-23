@@ -6,7 +6,7 @@ from arq.connections import RedisSettings
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import IncidentDetailResponse, LogIngestRequest, LogIngestResponse
@@ -43,11 +43,22 @@ async def health_check():
         raise HTTPException(status_code=503, detail=f"Redis unavailable: {exc}")
 
 
+@router.get("/incidents", response_model=list[IncidentDetailResponse])
+async def list_incidents(limit: int = 20, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Incident).order_by(desc(Incident.updated_at)).limit(limit)
+    )
+    return result.scalars().all()
+
+
 @router.post("/ingest", response_model=LogIngestResponse)
 async def ingest_log(payload: LogIngestRequest, db: AsyncSession = Depends(get_db)):
     fingerprint = generate_fingerprint(payload.service_name, payload.raw_log)
     count_key = f"incident:count:{fingerprint}"
+
     occurrence_count = await redis_client.incr(count_key)
+    if occurrence_count == 1:
+        await redis_client.expire(count_key, 3600)
 
     result = await db.execute(
         select(Incident).where(Incident.fingerprint == fingerprint)
@@ -71,11 +82,12 @@ async def ingest_log(payload: LogIngestRequest, db: AsyncSession = Depends(get_d
 
     queued = False
     if occurrence_count == 1:
-        await redis_client.expire(count_key, 3600)
         arq_pool = await create_pool(arq_redis_settings)
-        await arq_pool.enqueue_job("triage_incident", fingerprint)
-        await arq_pool.aclose()
-        queued = True
+        try:
+            await arq_pool.enqueue_job("triage_incident", fingerprint)
+            queued = True
+        finally:
+            await arq_pool.aclose()
 
     return LogIngestResponse(
         status="accepted",
