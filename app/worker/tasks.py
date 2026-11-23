@@ -1,6 +1,8 @@
+import json
 from arq.connections import RedisSettings
 from sqlalchemy import select
 
+from app.agent.graph import run_triage_agent
 from app.core.database import AsyncSessionLocal
 from app.core.models import Incident
 
@@ -17,13 +19,21 @@ async def triage_incident(ctx, fingerprint: str) -> str:
         incident.status = "investigating"
         await session.commit()
 
-        incident.diagnosis = (
-            f"Placeholder diagnosis for {incident.service_name} ({fingerprint}). "
-            "Ready for LangGraph agent in Phase 3."
-        )
-        incident.status = "diagnosed"
+        try:
+            report = await run_triage_agent(
+                fingerprint=incident.fingerprint,
+                service_name=incident.service_name,
+                environment=incident.environment,
+                raw_log=incident.raw_log,
+            )
+            incident.diagnosis = json.dumps(report, indent=2)
+            incident.status = "diagnosed"
+        except Exception as exc:
+            incident.diagnosis = json.dumps({"error": str(exc)}, indent=2)
+            incident.status = "failed"
+
         await session.commit()
-        return f"diagnosed:{fingerprint}"
+        return f"{incident.status}:{fingerprint}"
 
 
 class WorkerSettings:
