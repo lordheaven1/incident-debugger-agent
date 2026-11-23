@@ -1,12 +1,11 @@
 import asyncio
 from pathlib import Path
-from sentence_transformers import SentenceTransformer
 from sqlalchemy import delete, select
 
 from app.core.database import AsyncSessionLocal, engine, init_db
+from app.core.embeddings import embed_query, embed_texts
 from app.core.models import CodeChunk
 
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 ALLOWED_EXTENSIONS = {".py", ".md"}
 IGNORED_DIRS = {".venv", "__pycache__", ".git", ".pytest_cache"}
 
@@ -56,9 +55,8 @@ async def index_directory(target_dir: str = "sample_service") -> None:
         print("No matching files found to index.")
         return
 
-    model = SentenceTransformer(MODEL_NAME)
     texts = [f"{c['file_path']}\n{c['content']}" for c in all_chunks]
-    embeddings = model.encode(texts, normalize_embeddings=True).tolist()
+    embeddings = embed_texts(texts)
 
     async with AsyncSessionLocal() as session:
         await session.execute(delete(CodeChunk))
@@ -78,8 +76,7 @@ async def index_directory(target_dir: str = "sample_service") -> None:
 
 
 async def verify_search(query: str) -> None:
-    model = SentenceTransformer(MODEL_NAME)
-    query_vec = model.encode(query, normalize_embeddings=True).tolist()
+    query_vec = embed_query(query)
 
     async with AsyncSessionLocal() as session:
         stmt = (

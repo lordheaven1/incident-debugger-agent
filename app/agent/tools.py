@@ -1,29 +1,17 @@
 from pathlib import Path
 import subprocess
-from sentence_transformers import SentenceTransformer
+
 from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
+from app.core.embeddings import embed_query
 from app.core.models import CodeChunk
 
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 PROJECT_ROOT = Path.cwd().resolve()
-_embedder: SentenceTransformer | None = None
-
-
-def get_embedder() -> SentenceTransformer:
-    global _embedder
-    if _embedder is None:
-        try:
-            _embedder = SentenceTransformer(MODEL_NAME, local_files_only=True)
-        except Exception:
-            _embedder = SentenceTransformer(MODEL_NAME)
-    return _embedder
 
 
 async def search_codebase(query: str, limit: int = 3) -> list[dict]:
-    embedder = get_embedder()
-    query_vec = embedder.encode(query, normalize_embeddings=True).tolist()
+    query_vec = embed_query(query)
 
     async with AsyncSessionLocal() as session:
         stmt = (

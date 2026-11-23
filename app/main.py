@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from sqlalchemy import func, select
+from sqlalchemy import delete
 
 from app.api.routes import router
 from app.core.database import AsyncSessionLocal, init_db
@@ -13,9 +13,9 @@ from scripts.index_repo import index_directory
 async def lifespan(app: FastAPI):
     await init_db()
     async with AsyncSessionLocal() as session:
-        count = await session.scalar(select(func.count()).select_from(CodeChunk))
-        if not count:
-            await index_directory("sample_service")
+        await session.execute(delete(CodeChunk))
+        await session.commit()
+    await index_directory("sample_service")
     yield
 
 
