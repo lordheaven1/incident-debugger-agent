@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from sqlalchemy import delete
+from fastapi.responses import RedirectResponse
+from sqlalchemy import func, select
 
 from app.api.routes import router
 from app.core.database import AsyncSessionLocal, init_db
@@ -13,9 +14,9 @@ from scripts.index_repo import index_directory
 async def lifespan(app: FastAPI):
     await init_db()
     async with AsyncSessionLocal() as session:
-        await session.execute(delete(CodeChunk))
-        await session.commit()
-    await index_directory("sample_service")
+        count = await session.scalar(select(func.count()).select_from(CodeChunk))
+        if not count:
+            await index_directory("sample_service")
     yield
 
 
@@ -24,4 +25,11 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return RedirectResponse(url="/docs")
+
+
 app.include_router(router)
