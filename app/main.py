@@ -1,20 +1,27 @@
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+from sqlalchemy import func, select
 
 from app.api.routes import router
-from app.core.database import init_db
-from app.core import models
+from app.core.database import AsyncSessionLocal, init_db
+from app.core.models import CodeChunk
+from scripts.index_repo import index_directory
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    async with AsyncSessionLocal() as session:
+        count = await session.scalar(select(func.count()).select_from(CodeChunk))
+        if not count:
+            await index_directory("sample_service")
     yield
 
 
 app = FastAPI(
     title="Autonomous Log Triage & Incident Debugger",
-    version="0.2.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 app.include_router(router)
