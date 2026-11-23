@@ -9,13 +9,6 @@ from app.agent.graph import run_triage_agent
 from app.core.database import AsyncSessionLocal
 from app.core.models import Incident
 
-load_dotenv()
-
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0").strip()
-worker_redis_settings = RedisSettings.from_dsn(REDIS_URL)
-if REDIS_URL.startswith("rediss://"):
-    worker_redis_settings.ssl = ssl.create_default_context(cafile=certifi.where())
-
 async def triage_incident(ctx, fingerprint: str) -> str:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -46,6 +39,17 @@ async def triage_incident(ctx, fingerprint: str) -> str:
 
 load_dotenv()
 
+import os
+from arq.connections import RedisSettings
+from dotenv import load_dotenv
+
+load_dotenv()
+
+raw_redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0").strip().strip('"').strip("'")
+if "upstash.io" in raw_redis_url and raw_redis_url.startswith("redis://"):
+    raw_redis_url = raw_redis_url.replace("redis://", "rediss://", 1)
+
+
 class WorkerSettings:
     functions = [triage_incident]
-    redis_settings = worker_redis_settings
+    redis_settings = RedisSettings.from_dsn(raw_redis_url)

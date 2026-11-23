@@ -1,5 +1,4 @@
 import os
-import ssl
 
 import certifi
 from arq import create_pool
@@ -17,16 +16,22 @@ from app.core.models import Incident
 
 load_dotenv()
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0").strip()
-redis_kwargs = {"decode_responses": True}
-arq_redis_settings = RedisSettings.from_dsn(REDIS_URL)
 
+def _normalize_redis_url(raw_url: str) -> str:
+    url = raw_url.strip().strip('"').strip("'")
+    if "upstash.io" in url and url.startswith("redis://"):
+        url = url.replace("redis://", "rediss://", 1)
+    return url
+
+
+REDIS_URL = _normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+redis_kwargs = {"decode_responses": True}
 if REDIS_URL.startswith("rediss://"):
     redis_kwargs["ssl_ca_certs"] = certifi.where()
-    arq_redis_settings.ssl = ssl.create_default_context(cafile=certifi.where())
 
 router = APIRouter()
 redis_client = Redis.from_url(REDIS_URL, **redis_kwargs)
+arq_redis_settings = RedisSettings.from_dsn(REDIS_URL)
 
 
 @router.get("/health")
