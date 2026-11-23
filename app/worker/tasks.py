@@ -1,5 +1,7 @@
 import json
+import os
 from arq.connections import RedisSettings
+from dotenv import load_dotenv
 from sqlalchemy import select
 
 from app.agent.graph import run_triage_agent
@@ -35,7 +37,10 @@ async def triage_incident(ctx, fingerprint: str) -> str:
         await session.commit()
         return f"{incident.status}:{fingerprint}"
 
+load_dotenv()
 
 class WorkerSettings:
     functions = [triage_incident]
-    redis_settings = RedisSettings(host="localhost", port=6379, database=0)
+    redis_settings = RedisSettings.from_dsn(
+        os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    )

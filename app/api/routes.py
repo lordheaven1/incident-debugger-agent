@@ -1,5 +1,8 @@
+import os
+
 from arq import create_pool
 from arq.connections import RedisSettings
+from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -10,9 +13,13 @@ from app.core.database import get_db
 from app.core.fingerprint import generate_fingerprint
 from app.core.models import Incident
 
+load_dotenv()
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
 router = APIRouter()
-redis_client = Redis(host="localhost", port=6379, db=0, decode_responses=True)
-arq_redis_settings = RedisSettings(host="localhost", port=6379, database=0)
+redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+arq_redis_settings = RedisSettings.from_dsn(REDIS_URL)
 
 
 @router.get("/health")
