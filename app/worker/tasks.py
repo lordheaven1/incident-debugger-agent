@@ -1,13 +1,20 @@
 import json
 import os
+import ssl
+import certifi
 from arq.connections import RedisSettings
 from dotenv import load_dotenv
 from sqlalchemy import select
-
 from app.agent.graph import run_triage_agent
 from app.core.database import AsyncSessionLocal
 from app.core.models import Incident
 
+load_dotenv()
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0").strip()
+worker_redis_settings = RedisSettings.from_dsn(REDIS_URL)
+if REDIS_URL.startswith("rediss://"):
+    worker_redis_settings.ssl = ssl.create_default_context(cafile=certifi.where())
 
 async def triage_incident(ctx, fingerprint: str) -> str:
     async with AsyncSessionLocal() as session:
@@ -41,6 +48,4 @@ load_dotenv()
 
 class WorkerSettings:
     functions = [triage_incident]
-    redis_settings = RedisSettings.from_dsn(
-        os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    )
+    redis_settings = worker_redis_settings

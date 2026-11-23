@@ -1,5 +1,7 @@
 import os
+import ssl
 
+import certifi
 from arq import create_pool
 from arq.connections import RedisSettings
 from dotenv import load_dotenv
@@ -15,11 +17,16 @@ from app.core.models import Incident
 
 load_dotenv()
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0").strip()
+redis_kwargs = {"decode_responses": True}
+arq_redis_settings = RedisSettings.from_dsn(REDIS_URL)
+
+if REDIS_URL.startswith("rediss://"):
+    redis_kwargs["ssl_ca_certs"] = certifi.where()
+    arq_redis_settings.ssl = ssl.create_default_context(cafile=certifi.where())
 
 router = APIRouter()
-redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
-arq_redis_settings = RedisSettings.from_dsn(REDIS_URL)
+redis_client = Redis.from_url(REDIS_URL, **redis_kwargs)
 
 
 @router.get("/health")
