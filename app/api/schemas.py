@@ -14,3 +14,17 @@ class LogIngestResponse(BaseModel):
     fingerprint: str
     occurrence_count: int
     queued_for_triage: bool
+
+
+class IncidentDetailResponse(BaseModel):
+    fingerprint: str
+    service_name: str
+    environment: str
+    raw_log: str
+    occurrence_count: int
+    status: str
+    diagnosis: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
